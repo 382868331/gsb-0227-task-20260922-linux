@@ -1,11 +1,14 @@
-"""固定输入演示：精确整数卷积（多模 NTT + CRT）。
+"""固定输入演示：精确整数卷积（多模 NTT + CRT）与固定块长入口。
 
 运行：python demo.py
 
-内容全部为仓库内确定性数据（固定种子的伪随机数），真实调用本库计算，
-不 sleep、不使用预录结果。打印：
-  1. 一个单模情形（小系数界）与一个双模情形（大系数界）的模数选择和精确结果；
-  2. 一个实际触发的拒绝边界：系数绝对值 10^6+1 被拒绝，而非取模冒充精确。
+内容全部为仓库内确定性数据（固定种子的伪随机数/手算小例），真实调用
+本库计算，不 sleep、不使用预录结果。打印：
+  1. 旧入口：一个单模情形与一个双模情形的模数选择和精确结果；
+  2. 一个实际触发的拒绝边界：系数绝对值 10^6+1 被拒绝，而非取模冒充；
+  3. 固定块长入口：超过 256 长度的手算/随机例的重叠累加结果与工作数组
+     大小统计（含内部零块）；
+  4. 块长入口的实际错误：非法块长（bool、0）与超长输入中的超界系数。
 """
 
 import random
@@ -13,8 +16,12 @@ import time
 
 from exact_conv import (
     MAX_COEFF_ABS,
+    MAX_POLY_LENGTH,
     CoefficientBoundError,
+    InvalidBlockLengthError,
+    LengthOutOfBoundError,
     convolve,
+    convolve_blocked,
 )
 from tests.reference import naive_convolve
 
@@ -69,6 +76,71 @@ def main():
         print("（没有返回任何取模结果：本库不以取模冒充精确卷积）")
     else:  # pragma: no cover - 演示护栏：若未拒绝则明确失败
         raise AssertionError("超界输入竟被接受，契约被破坏")
+    print()
+
+    # ---- 固定块长入口 ----
+    print("=== 情形 4：固定块长入口，长度超过旧上限 256（正常结果）===")
+    # [1]*257 与 [1, -1] 的学校乘法：除首尾外全部抵消，
+    # 结果必为 [1, 0, 0, ..., 0, -1]（长 258），可手算核对。
+    a4 = [1] * (MAX_POLY_LENGTH + 1)
+    b4 = [1, -1]
+    started = time.perf_counter()
+    r4 = convolve_blocked(a4, b4, 32)
+    elapsed = time.perf_counter() - started
+    expect4 = [1] + [0] * 256 + [-1]
+    assert r4.coefficients == expect4 == naive_convolve(a4, b4)
+    print(f"len(a)={len(a4)} > 256（旧入口直接拒绝），块长=32，"
+          f"分块 {r4.blocks_a}x{r4.blocks_b}，块对调用 {r4.block_pair_calls} 次")
+    print(f"结果长 {len(r4.coefficients)}：首项={r4.coefficients[0]}, "
+          f"末项={r4.coefficients[-1]}，中间 {sum(1 for x in r4.coefficients if x == 0)} "
+          f"个 0（错位重叠累加后恰好抵消）")
+    print(f"工作数组统计: {r4.work}")
+    print(f"已与朴素学校乘法逐项核对一致；耗时 {elapsed * 1000:.1f} ms")
+    print()
+
+    print("=== 情形 5：大块 + 内部零块 + 大系数（块长 64，300 项 ±10^6）===")
+    rng = random.Random(20260924)
+    # 中间恰好夹一个 64 项的全零块（第 4 块），零块也照常调用旧卷积。
+    a5 = [rng.choice((-1, 1)) * MAX_COEFF_ABS for _ in range(192)] + [0] * 64 \
+        + [rng.choice((-1, 1)) * MAX_COEFF_ABS for _ in range(44)]
+    b5 = [rng.choice((-1, 1)) * MAX_COEFF_ABS for _ in range(300)]
+    started = time.perf_counter()
+    r5 = convolve_blocked(a5, b5, 64)
+    elapsed = time.perf_counter() - started
+    assert r5.coefficients == naive_convolve(a5, b5), "结果与朴素定义不一致"
+    print(f"len(a)=len(b)=300，分块 {r5.blocks_a}x{r5.blocks_b}，"
+          f"块对调用 {r5.block_pair_calls} 次（a 含 1 个内部全零块，未跳过）")
+    print(f"结果系数绝对值峰值 = {max(map(abs, r5.coefficients))}，"
+          f"前 5 项 = {r5.coefficients[:5]}")
+    print(f"块内最大 NTT 长度 = {r5.transform_length}，用到模数 {r5.moduli}")
+    print(f"工作数组统计: {r5.work}")
+    print(f"已与朴素整数卷积定义逐项核对一致；耗时 {elapsed * 1000:.1f} ms")
+    print()
+
+    # 块长入口的实际错误：非法块长与超长输入中的超界系数。
+    print("=== 情形 6：块长入口的实际拒绝（预期 InvalidBlockLengthError / "
+          "CoefficientBoundError）===")
+    for bad_block_size in (True, 0, MAX_POLY_LENGTH + 1):
+        try:
+            convolve_blocked([1, 2, 3, 4], [1, 1], bad_block_size)
+        except InvalidBlockLengthError as exc:
+            print(f"block_size={bad_block_size!r} -> {type(exc).__name__}: {exc}")
+        else:  # pragma: no cover - 演示护栏
+            raise AssertionError(f"非法块长 {bad_block_size!r} 竟被接受")
+    # 旧入口对 257 长度报长度错误；新入口接受长度，但第 300 个系数超界，
+    # 必须给出可定位错误且不留半更新状态。
+    bad_long = [1] * 299 + [MAX_COEFF_ABS + 1]
+    try:
+        convolve_blocked(bad_long, [2], 64)
+    except CoefficientBoundError as exc:
+        print(f"长输入第 300 项超界 -> {type(exc).__name__}: {exc}")
+    else:  # pragma: no cover - 演示护栏
+        raise AssertionError("超长输入中的超界系数竟未被拒绝")
+    # 对照：同样的长度用旧入口会先撞长度上限。
+    try:
+        convolve(bad_long, [2])
+    except LengthOutOfBoundError as exc:
+        print(f"同一输入走旧入口 -> {type(exc).__name__}: {exc}")
 
 
 if __name__ == "__main__":

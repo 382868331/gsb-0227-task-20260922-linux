@@ -32,6 +32,15 @@ class CoefficientBoundError(ExactConvolutionError):
 class UnprovableBoundError(ExactConvolutionError):
     """固定模数集合的乘积不足以对该系数界保证 CRT 唯一恢复。
 
-    在当前接口上限内（最多 256 项、系数绝对值 <= 10**6）该错误不会发生，
+    在当前接口上限内（单块最多 256 项、系数绝对值 <= 10**6）该错误不会发生，
     它属于防御性错误：明确区分“证明无法成立”与其他运行期失败。
+    """
+
+
+class InvalidBlockLengthError(ExactConvolutionError):
+    """固定块长参数非法：不是精确 ``int``（拒绝 bool），或不在
+    ``1..MAX_POLY_LENGTH`` 范围内。
+
+    块长是分块入口 :func:`exact_conv.convolve_blocked` 的参数；每个块都要
+    能直接交给旧精确卷积，故块长本身不得超过单多项式长度上限 256。
     """
