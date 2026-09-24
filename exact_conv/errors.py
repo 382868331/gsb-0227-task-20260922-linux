@@ -35,3 +35,11 @@ class UnprovableBoundError(ExactConvolutionError):
     在当前接口上限内（最多 256 项、系数绝对值 <= 10**6）该错误不会发生，
     它属于防御性错误：明确区分“证明无法成立”与其他运行期失败。
     """
+
+
+class InvalidBlockSizeError(ExactConvolutionError):
+    """固定块长入口的 ``block_size`` 非法。
+
+    合法值为 ``1 .. MAX_POLY_LENGTH`` 的精确 ``int``（拒绝 bool、float、
+    0、负数与超过单块上限的值——超过上限会使块本身无法被旧精确卷积接受）。
+    """

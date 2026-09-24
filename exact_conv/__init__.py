@@ -1,7 +1,8 @@
 """精确整数多项式卷积：多模 NTT + CRT 重建。
 
-公开接口见模块级函数 :func:`convolve` 与 :func:`plan_moduli`，以及
-``ConvolutionResult`` 结果对象。算法流程：
+公开接口见模块级函数 :func:`convolve`、:func:`blocked_convolve` 与
+:func:`plan_moduli`，以及 ``ConvolutionResult`` /
+``BlockedConvolutionResult`` 结果对象。算法流程：
 
 1. 严格校验输入（结构、bool、NaN/Infinity、长度与系数界），绝不静默纠正。
 2. 用实际系数界 B = min(n, m) * max|A| * max|B| 选择*最少*的固定模数，
@@ -17,6 +18,7 @@ from .crt import reconstruct
 from .errors import (
     CoefficientBoundError,
     ExactConvolutionError,
+    InvalidBlockSizeError,
     InvalidCoefficientError,
     InvalidPolynomialError,
     LengthOutOfBoundError,
@@ -32,8 +34,12 @@ MAX_COEFF_ABS = 10**6
 
 __all__ = [
     "convolve",
+    "blocked_convolve",
     "plan_moduli",
     "ConvolutionResult",
+    "BlockedConvolutionResult",
+    "BlockCallRecord",
+    "WorkingSetStats",
     "MODULI",
     "PRIMITIVE_ROOT",
     "MAX_POLY_LENGTH",
@@ -44,6 +50,7 @@ __all__ = [
     "LengthOutOfBoundError",
     "CoefficientBoundError",
     "UnprovableBoundError",
+    "InvalidBlockSizeError",
 ]
 
 
@@ -87,8 +94,12 @@ class ConvolutionResult:
         return hash((tuple(self.coefficients), self.moduli))
 
 
-def _validate_polynomial(values, name):
-    """校验单个多项式，返回系数元组；错误信息带参数名与下标，可定位。"""
+def _validate_polynomial(values, name, max_length=MAX_POLY_LENGTH):
+    """校验单个多项式，返回系数元组；错误信息带参数名与下标，可定位。
+
+    ``max_length`` 为 ``None`` 时不设长度上限（供固定块长入口校验长输入，
+    块内长度上限仍由 :func:`convolve` 自身保证）。
+    """
     if isinstance(values, (str, bytes)) or not hasattr(values, "__iter__"):
         raise InvalidPolynomialError(
             f"{name!r} must be an iterable of integer coefficients, "
@@ -97,12 +108,13 @@ def _validate_polynomial(values, name):
     coeffs = list(values)
     if not coeffs:
         raise LengthOutOfBoundError(
-            f"{name!r} must be non-empty (length between 1 and {MAX_POLY_LENGTH})"
+            f"{name!r} must be non-empty"
+            + (f" (length between 1 and {max_length})" if max_length else "")
         )
-    if len(coeffs) > MAX_POLY_LENGTH:
+    if max_length is not None and len(coeffs) > max_length:
         raise LengthOutOfBoundError(
             f"{name!r} length {len(coeffs)} exceeds MAX_POLY_LENGTH="
-            f"{MAX_POLY_LENGTH}"
+            f"{max_length}"
         )
     for index, value in enumerate(coeffs):
         # bool 是 int 的子类，按契约必须拒绝。
@@ -213,3 +225,12 @@ def convolve(a, b):
         for k in range(output_len)
     ]
     return ConvolutionResult(exact, moduli, bound, product, size)
+
+
+# 固定块长重叠累加入口（在本模块完全定义后导入，避免循环导入）。
+from .blocked import (  # noqa: E402
+    BlockCallRecord,
+    BlockedConvolutionResult,
+    WorkingSetStats,
+    blocked_convolve,
+)
