@@ -35,3 +35,7 @@ class UnprovableBoundError(ExactConvolutionError):
     在当前接口上限内（最多 256 项、系数绝对值 <= 10**6）该错误不会发生，
     它属于防御性错误：明确区分“证明无法成立”与其他运行期失败。
     """
+
+
+class InvalidRingSizeError(ExactConvolutionError):
+    """循环/负循环乘法的环规模 N 非法（非 int、bool、非 [1,256] 内 2 的幂）。"""

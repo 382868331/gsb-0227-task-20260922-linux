@@ -1,6 +1,7 @@
-# 精确整数卷积：多模 NTT + CRT 重建
+# 精确整数卷积与循环/负循环多项式乘法：多模 NTT + CRT 重建
 
-离线、零依赖、可导入的整数多项式乘法库。系数用 Python 大整数与模算术
+离线、零依赖、可导入的整数多项式乘法库，支持线性卷积、循环卷积
+（`Z[x]/(x^N-1)`）与负循环卷积（`Z[x]/(x^N+1)`）。系数用 Python 大整数与模算术
 处理，**全程不使用浮点**，因此结果是数学上的精确值，不存在舍入误差，
 也不需要任何误差容差。
 
@@ -13,8 +14,8 @@
 ## 快速开始
 
 ```bash
-python -m unittest discover -s tests -v   # 运行全部必要测试
-python demo.py                            # 约 1 秒内完成的真实计算演示
+./.venv/bin/python -m unittest discover -s tests -v   # 运行全部测试
+./.venv/bin/python demo.py                            # 真实计算演示（< 1 秒）
 ```
 
 ## 接口
@@ -29,6 +30,41 @@ result.coefficient_bound    # B = min(n,m) * max|A| * max|B|
 result.modulus_product      # 所选模数乘积 M，保证 M > 2*B
 result.transform_length     # 补零后的 NTT 长度（2 的幂）
 ```
+
+`multiply` 是 `convolve` 的语义别名（原线性乘法接口保留不变）。
+
+### 循环 / 负循环乘法
+
+```python
+from exact_conv import cyclic_mul, negacyclic_mul
+
+r1 = cyclic_mul(a, b, N)      # Z[x]/(x^N - 1)
+r2 = negacyclic_mul(a, b, N)  # Z[x]/(x^N + 1)
+r1.coefficients               # list[int]：长度恰为 N 的精确整数
+```
+
+- `N` 必须是非 `bool` 的 `int`，且为 **1..256 的 2 的幂**
+  （`1, 2, 4, …, 256`，见 `RING_SIZES` 与 `MAX_RING_SIZE`）。
+- `a`、`b` 长度 **0..N**：空序列 `[]` 或全零表示零多项式（线性
+  `convolve` 仍要求非空）；长度超过 N 直接抛 `LengthOutOfBoundError`，
+  **不静默截断或预约化**。系数规则与线性接口相同（`int`、拒 `bool`/
+  `float`、绝对值 ≤ 10^6）。
+- 算法：先做精确线性卷积（NTT+CRT），再按指数折返：
+  - 循环：`r[k mod N] += C[k]`；
+  - 负循环：`q, r = divmod(k, N)`，`r[r] += (-1)^q · C[k]`。
+  负循环的变号作用于 **CRT 重建出的有符号整数**，不是模某个 NTT 素数的
+  余数。
+- `RingProductResult` 字段：`coefficients`、`moduli`、
+  `coefficient_bound`（折返后界）、`linear_coefficient_bound`（折返前界）、
+  `modulus_product`、`transform_length`、`ring_size`、`mode`。
+- 可核验系数界：设输入实际长度为 n、m（空输入按 1 计），则
+  **折返后**每个系数是至多 `min(N, n+m-1)` 个
+  `|a_i b_j| ≤ max|A|·max|B|` 的带符号项之和，故统一界为
+  `B' = min(N, n+m-1)·max|A|·max|B|`；所选 CRT 模数乘积满足
+  **`M > 2·B'`**，覆盖折返后同号相加/异号相消的全部可能绝对值。
+- 定义边界：零多项式乘积为长度 N 的全零；`N=1` 时两个商环都是常数环，
+  常数多项式相乘两种模式结果相同；最高次相乘（`x^(N-1)·x^(N-1)`）循环
+  得 `x^(N-2)`、负循环得 `-x^(N-2)`。
 
 - `a`、`b`：整数系数的可迭代对象（list/tuple/生成器均可），长度 1..256。
 - 系数必须是 `int`，绝对值 `<= 10**6`。
@@ -61,6 +97,8 @@ result.transform_length     # 补零后的 NTT 长度（2 的幂）
 - `UnprovableBoundError`：固定三模数乘积仍不足以保证 CRT 唯一恢复（在
   256×10^6 的接口上限内不会发生）。它表示“数学上无法证明精确”，与任何
   搜索预算耗尽之类的运行期失败明确区分。
+- `InvalidRingSizeError`：环规模 `N` 不是 `int`（含 `bool`）或不是
+  [1, 256] 内的 2 的幂。
 
 错误信息都带参数名与下标，例如 `a[2] ...`、`b[1] ...`，不静默纠正输入。
 `convolve` 是纯函数：校验失败或成功都不改动输入，不产生部分结果。
@@ -82,13 +120,16 @@ result.transform_length     # 补零后的 NTT 长度（2 的幂）
 4. **Garner 混合基数 CRT**（`exact_conv/crt.py`）：增量合并各模余数，
    再把 `[0, M)` 代表折叠到对称整数区间 `(-M/2, M/2]`。由 `M > 2B` 且
    `|真值| <= B`，折叠结果与真值无歧义一致。
-5. **朴素整数参考独立实现**（`tests/reference.py`）：只用双重循环按定义
+5. **循环/负循环折返**（`exact_conv/__init__.py`）：线性卷积精确重建后
+   按 `i+j` 的商/余数独立双循环语义折返；模数规划覆盖的是折返后的界
+   `B'`（可能大于线性界，例如满长输入时折返会叠加至多 N 项），而非线性界。
+6. **朴素整数参考独立实现**（`tests/reference.py`）：只用双重循环按定义
    计算，**不导入被测核心**；测试期望值全部来自它。NTT 正逆往返、多模余数
    一致性等只作为补充检验。
 
 ## 测试覆盖
 
-`python -m unittest discover -s tests -v` 共 30+ 个用例，含：
+`./.venv/bin/python -m unittest discover -s tests -v` 共 50 个用例，含：
 
 - 手算小例、确定性随机多组规模（1×1 到 256×256）；
 - **全负**（负×负、负×正）、**全零/零散点**、**长尾零**（256 长但尾部
@@ -96,6 +137,10 @@ result.transform_length     # 补零后的 NTT 长度（2 的幂）
 - **单模 / 双模切换**、模数选择严格阈值（`2B` 恰在模两侧）、三模档与
   “无法证明精确”路径；
 - 接口上限 256 项 × ±10^6 对拍朴素参考；
+- 循环/负循环乘法在全部 N ∈ {1,2,…,256} 上对拍独立双循环折返参考，
+  覆盖：大系数折返抵消（10^6 级、跨模数重建后变号）、零多项式多种表示、
+  N=1 常数环、最高次乘最高次、循环/负循环符号差异、空输入与输入不被修改；
+- 非法 N（0、3、100、257、`True`、1.0 等）与长度超过 N 被拒绝；
 - `bool` / `NaN` / `Infinity` / 有限 `float` / 字符串 / `None` 拒绝；
   超长、空、超系数界拒绝；错误信息可定位；输入不被修改。
 
@@ -108,7 +153,9 @@ result.transform_length     # 补零后的 NTT 长度（2 的幂）
 ## 已知限制 / 非目标
 
 - 只实现本题契约的数学子集：三个固定素数、长度 ≤ 256、系数绝对值 ≤ 10^6；
-  不宣称通用 NTT/CRT 行业标准兼容，不支持任意模数或任意原根配置。
+  环规模只支持 1..256 的 2 的幂；不宣称通用 NTT/CRT 行业标准兼容，
+  不支持任意模数或任意原根配置，不做分块长卷积，也不提供任何密码学
+  安全声明。
 - 纯 Python 实现，追求正确与可证性，而非 SIMD/原生级吞吐；接口规模下
   256×256 双模卷积为毫秒量级。
 - 不提供网站、CLI 产品、报表等；终端命令仅用于跑测试与演示。
