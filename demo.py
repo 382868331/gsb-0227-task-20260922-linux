@@ -15,8 +15,10 @@ from exact_conv import (
     MAX_COEFF_ABS,
     CoefficientBoundError,
     convolve,
+    cyclic_mul,
+    negacyclic_mul,
 )
-from tests.reference import naive_convolve
+from tests.reference import naive_convolve, naive_ring_mul
 
 
 def _show_case(title, a, b):
@@ -69,6 +71,37 @@ def main():
         print("（没有返回任何取模结果：本库不以取模冒充精确卷积）")
     else:  # pragma: no cover - 演示护栏：若未拒绝则明确失败
         raise AssertionError("超界输入竟被接受，契约被破坏")
+
+    print()
+    print("=== 情形 4：循环 / 负循环乘法（同一对输入，符号差异来自折返）===")
+    n = 8
+    a4 = [5, -3, 0, 2, 0, 0, 0, 0]
+    b4 = [4, 0, -1, 0, 0, 0, 0, 7]
+    cyc = cyclic_mul(a4, b4, n)
+    neg = negacyclic_mul(a4, b4, n)
+    print(f"环参数 N={n}（2 的幂，1..256），关系分别为 {cyc.relation!r} / {neg.relation!r}")
+    print(f"线性逐项界 B={cyc.linear_coefficient_bound}，折返块数=2，"
+          f"折返界 2B={cyc.coefficient_bound}")
+    print(f"实际选用模数 {cyc.moduli}，乘积 M={cyc.modulus_product} > 2*2B={2 * cyc.coefficient_bound}")
+    print(f"循环   结果: {cyc.coefficients}")
+    print(f"负循环结果: {neg.coefficients}")
+    assert cyc.coefficients == naive_ring_mul(a4, b4, n, negative=False)
+    assert neg.coefficients == naive_ring_mul(a4, b4, n, negative=True)
+    print("两者均已与独立双循环逐项折返参考核对一致")
+    print()
+
+    # 大系数折返抵消：线性系数远超任一单模数，必须先 CRT 恢复有符号整数
+    # 再在整数上变号折返；在模 p 余数上变号会得到错误结果。
+    print("=== 情形 5：N=256 大系数负循环折返（检验有符号整数重建）===")
+    big = [MAX_COEFF_ABS] * 256
+    r5 = negacyclic_mul(big, big, 256)
+    print(f"折返界 = {r5.coefficient_bound}（= 2*B，而非 B），模数 {r5.moduli}")
+    print(f"R[0] = C[0] - C[256] = {r5.coefficients[0]}"
+          f"（精确值 {10**12} - {255 * 10**12}）")
+    print(f"R[254] = C[254] - C[510] = {r5.coefficients[254]}")
+    assert r5.coefficients == naive_ring_mul(big, big, 256, negative=True)
+    assert all(abs(c) <= r5.coefficient_bound for c in r5.coefficients)
+    print("逐系数在公布的折返界内，并与独立参考一致；N=256 双模计算仍为毫秒级")
 
 
 if __name__ == "__main__":
