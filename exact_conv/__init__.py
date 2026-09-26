@@ -16,13 +16,23 @@
 from .crt import reconstruct
 from .errors import (
     CoefficientBoundError,
+    DuplicatePointError,
     ExactConvolutionError,
     InvalidCoefficientError,
+    InvalidModulusError,
     InvalidPolynomialError,
     LengthOutOfBoundError,
     UnprovableBoundError,
 )
 from .ntt import MODULI, PRIMITIVE_ROOT, convolution_mod
+from .multipoint import (
+    MAX_DEGREE,
+    MAX_POINTS,
+    EvaluationResult,
+    InterpolationResult,
+    interpolate,
+    multipoint_evaluate,
+)
 
 #: 单个多项式的最大长度（接口边界）。
 MAX_POLY_LENGTH = 256
@@ -44,6 +54,14 @@ __all__ = [
     "LengthOutOfBoundError",
     "CoefficientBoundError",
     "UnprovableBoundError",
+    "InvalidModulusError",
+    "DuplicatePointError",
+    "multipoint_evaluate",
+    "interpolate",
+    "EvaluationResult",
+    "InterpolationResult",
+    "MAX_POINTS",
+    "MAX_DEGREE",
 ]
 
 

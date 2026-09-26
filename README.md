@@ -16,6 +16,19 @@
 python -m unittest discover -s tests -v   # 运行全部必要测试
 python demo.py                            # 约 1 秒内完成的真实计算演示
 ```
+### 准备虚拟环境（可选，无第三方依赖）
+
+\`\`\`bash
+python -m venv .venv
+.venv/bin/python -m unittest discover -s tests -v
+.venv/bin/python demo_iteration.py
+\`\`\`
+
+本次迭代新增演示：
+
+\`\`\`bash
+python demo_iteration.py   # 多点求值 + 插值 + 重复点拒绝边界，约 1 秒内
+\`\`\`
 
 ## 接口
 
@@ -36,6 +49,73 @@ result.transform_length     # 补零后的 NTT 长度（2 的幂）
 
 `plan_moduli(n, m, max_abs_a, max_abs_b)` 是纯函数的模数规划，返回
 `(moduli, bound, modulus_product)`，可在不做卷积时单独查询“最少要用几个模”。
+
+## 素域多点求值与插值（本次迭代新增）
+
+在已有 NTT 多项式乘法之上，为固定 NTT 素域增加批量求值与还原：
+
+```python
+from exact_conv import multipoint_evaluate, interpolate, MODULI
+
+p = MODULI[0]                       # 只允许三个固定 NTT 素数之一
+ev = multipoint_evaluate(coeffs, points, p)
+ev.values                         # list[int]：各点函数值，均在 [0, p-1]
+ev.multiplication_count           # 本次实际执行的多项式乘法次数
+
+ip = interpolate(points, values, p)
+ip.coefficients                   # 次数 < 点数的唯一多项式，升幂、
+                                  # 规范到 [0, p-1]、去高位零（零多项式为 [0]）
+ip.multiplication_count
+```
+
+- `coeffs`：升幂系数，精确 `int`（拒绝 bool），任意大小，先规范到
+  `[0, p-1]`；长度 0..129（空序列即零多项式），**次数可高于点数**。
+- `points`：1..128 个求值点；求值允许重复点（只是重复求值），
+  **插值要求互异**（模 p 后判重，重复即 `DuplicatePointError`）。
+- `values`：与 `points` 等长的函数值。
+- 输入输出一律是域元素（`[0, p-1]` 的 `int`），**不把旧整数 CRT
+  重建结果直接当域元素**；旧整数卷积路径完全不变。
+
+### 算法
+
+1. **乘积树**：叶子为 `(x - x_i)`，补齐到 2 的幂后自底向上成对相乘，
+   乘法复用 `exact_conv.ntt.convolution_mod`；与单位多项式 1 的合并
+   不产生实际乘法、不计数。
+2. **余式树求值**：自顶向下逐层取余（首一除式朴素长除法，不占用乘法
+   计数），叶子即各点函数值。零多项式、单点、点 0、次数高于点数均走
+   同一条路径。
+3. **插值**：根节点即 `M(x) = ∏(x - x_i)`，对形式导数 `M'` 复用余式树
+   在全部点求值，再按 Lagrange 公式
+   `f = Σ y_i · M'(x_i)⁻¹ · M/(x - x_i)` 累加（`M/(x - x_i)` 用首一
+   线性因子综合除法）。
+4. **乘法计数**：结果对象的 `multiplication_count` 统计实际发生的多项式
+   乘法（乘积树合并）次数；取余与综合除法不调用多项式乘法。
+
+### 新增限制与错误语义
+
+| 项 | 值 |
+|---|---|
+| 可用素域 | 仅 `MODULI` 中三个固定 NTT 素数 |
+| 点数上限 | `MAX_POINTS = 128` |
+| 次数上限 | `MAX_DEGREE = 128`（系数至多 129 项） |
+
+新增错误（仍继承 `ExactConvolutionError` / `ValueError`）：
+
+- `InvalidModulusError`：模数不是精确 `int`（拒绝 bool/float），或不在
+  固定 NTT 素数集合内——不接受任意模数。
+- `DuplicatePointError`：插值点在模 p 后不互异，直接拒绝而非返回某个
+  “看似合理”的多项式。
+
+点数/次数超界抛 `LengthOutOfBoundError`；系数/点/值类型非法抛
+`InvalidCoefficientError`（拒绝 bool 与 float）；非可迭代输入抛
+`InvalidPolynomialError`。错误信息带参数名与下标，可定位。
+
+### 验证口径
+
+- 多点求值：与 `tests/test_multipoint.py` 中**独立 Horner 逐点**参考
+  对照（不导入被测核心）。
+- 插值：与独立 **Vandermonde 高斯消元**参考对照；求值→插值往返只作
+  补充检验。
 
 ### 固定常量
 

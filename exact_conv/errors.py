@@ -35,3 +35,19 @@ class UnprovableBoundError(ExactConvolutionError):
     在当前接口上限内（最多 256 项、系数绝对值 <= 10**6）该错误不会发生，
     它属于防御性错误：明确区分“证明无法成立”与其他运行期失败。
     """
+
+
+class InvalidModulusError(ExactConvolutionError):
+    """素域模数非法：不是精确 int，或不在本库可用的 NTT 素数集合内。
+
+    多点求值/插值只在本库已有 NTT 蝶形可直接复用的固定素数上进行，
+    不接受任意模数（不宣称通用有限域兼容）。
+    """
+
+
+class DuplicatePointError(ExactConvolutionError):
+    """插值点不互异。
+
+    插值要求点两两不同，否则解不唯一（或不存在），直接拒绝而非
+    静默返回某个“看似合理”的多项式。
+    """
