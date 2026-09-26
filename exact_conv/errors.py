@@ -35,3 +35,11 @@ class UnprovableBoundError(ExactConvolutionError):
     在当前接口上限内（最多 256 项、系数绝对值 <= 10**6）该错误不会发生，
     它属于防御性错误：明确区分“证明无法成立”与其他运行期失败。
     """
+
+
+class UnsupportedModulusError(ExactConvolutionError):
+    """请求的素数不在固定 NTT 素数集合内（多点求值 / 插值）。"""
+
+
+class DuplicatePointError(ExactConvolutionError):
+    """插值点按模 p 约化后不互异，插值唯一性无法保证，直接拒绝。"""

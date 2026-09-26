@@ -16,11 +16,21 @@
 from .crt import reconstruct
 from .errors import (
     CoefficientBoundError,
+    DuplicatePointError,
     ExactConvolutionError,
     InvalidCoefficientError,
     InvalidPolynomialError,
     LengthOutOfBoundError,
     UnprovableBoundError,
+    UnsupportedModulusError,
+)
+from .multipoint import (
+    MAX_DEGREE,
+    MAX_POINTS,
+    EvaluationResult,
+    InterpolationResult,
+    evaluate_multi,
+    interpolate,
 )
 from .ntt import MODULI, PRIMITIVE_ROOT, convolution_mod
 
@@ -44,6 +54,14 @@ __all__ = [
     "LengthOutOfBoundError",
     "CoefficientBoundError",
     "UnprovableBoundError",
+    "UnsupportedModulusError",
+    "DuplicatePointError",
+    "evaluate_multi",
+    "interpolate",
+    "EvaluationResult",
+    "InterpolationResult",
+    "MAX_POINTS",
+    "MAX_DEGREE",
 ]
 
 

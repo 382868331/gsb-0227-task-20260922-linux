@@ -13,8 +13,10 @@
 ## 快速开始
 
 ```bash
-python -m unittest discover -s tests -v   # 运行全部必要测试
-python demo.py                            # 约 1 秒内完成的真实计算演示
+python -m venv .venv && . .venv/bin/activate   # 可选；仅用标准库，无依赖可装
+python -m unittest discover -s tests -v        # 运行全部必要测试
+python demo.py                                 # 整数卷积演示（约 1 秒）
+python demo_iteration.py                       # 多点求值 / 插值演示（远小于 90 秒）
 ```
 
 ## 接口
@@ -36,6 +38,48 @@ result.transform_length     # 补零后的 NTT 长度（2 的幂）
 
 `plan_moduli(n, m, max_abs_a, max_abs_b)` 是纯函数的模数规划，返回
 `(moduli, bound, modulus_product)`，可在不做卷积时单独查询“最少要用几个模”。
+
+## 素域多点求值与插值（本迭代新增）
+
+复用既有 NTT 多项式乘法，在固定 NTT 素域 F_p 上提供批量求值与还原：
+
+```python
+from exact_conv import evaluate_multi, interpolate
+
+ev = evaluate_multi(coeffs, points, p)
+ev.values            # list[int]：f(points[i]) mod p，与点顺序一致，均在 [0, p-1]
+ev.modulus           # 使用的素数 p
+ev.multiplications   # 实际执行的多项式乘法（NTT 卷积）次数
+
+ip = interpolate(points, values, p)
+ip.coefficients      # list[int]：唯一次数 < 点数的多项式系数（低次在前），
+                     # 规范到 [0, p-1]，已去高位零
+ip.modulus           # 使用的素数 p
+ip.multiplications   # 实际多项式乘法次数
+```
+
+- `p` 必须是固定 NTT 素数之一（`1004535809` / `998244353` / `469762049`），
+  不支持其他模数。
+- 点数 `1..128`（`MAX_POINTS = 128`），次数 `<= 128`（`MAX_DEGREE = 128`，
+  即 `coeffs` 最多 129 项）。
+- 系数、点、函数值均为 `int`（拒绝 `bool`/`float` 等），先规范到
+  `[0, p-1]` 再计算；负数与超过 p 的整数按模 p 约化。
+- 求值支持零多项式、单点、点 0、**次数高于点数**的情形；求值点允许重复
+  （逐点返回，不去重）。
+- 插值点按模 p 约化后**必须互异**；插值只返回次数小于点数的唯一多项式。
+- 本模块只做域 F_p 上的运算，不把整数 CRT 重建结果直接当作域元素。
+
+### 算法
+
+1. **乘积树**：对点集自底向上构建 `M(x) = prod (x - x_i)` 的二叉乘积树，
+   子问题在各处复用；多项式乘法走既有迭代蝶形 NTT（`exact_conv/ntt.py`）。
+2. **余式树求值**：被求值多项式先对树根取余，再沿树自顶向下对各子节点
+   取余（首一除式综合长除法，精确模算术），叶子常数即各点函数值。
+3. **插值**：对树根求导得 `M'(x)`，复用同一余式树在各点求值得拉格朗日
+   权重 `c_i = y_i / M'(x_i)`，再沿乘积树自底向上合并
+   `P = P_left * M_right + P_right * M_left`。
+4. 两个结果对象都暴露 `multiplications`，统计实际 NTT 多项式乘法次数；
+   旧整数卷积路径（`convolve` / `plan_moduli`）完全不变。
 
 ### 固定常量
 
@@ -61,6 +105,10 @@ result.transform_length     # 补零后的 NTT 长度（2 的幂）
 - `UnprovableBoundError`：固定三模数乘积仍不足以保证 CRT 唯一恢复（在
   256×10^6 的接口上限内不会发生）。它表示“数学上无法证明精确”，与任何
   搜索预算耗尽之类的运行期失败明确区分。
+- `UnsupportedModulusError`：多点求值 / 插值请求的素数不在固定 NTT 素数
+  集合内（或 `p` 不是 `int`）。
+- `DuplicatePointError`：插值点按模 p 约化后出现重复（含 `x` 与 `x+p`
+  这类域中相同的情形），唯一插值多项式不存在，直接拒绝。
 
 错误信息都带参数名与下标，例如 `a[2] ...`、`b[1] ...`，不静默纠正输入。
 `convolve` 是纯函数：校验失败或成功都不改动输入，不产生部分结果。
@@ -88,7 +136,7 @@ result.transform_length     # 补零后的 NTT 长度（2 的幂）
 
 ## 测试覆盖
 
-`python -m unittest discover -s tests -v` 共 30+ 个用例，含：
+`python -m unittest discover -s tests -v` 共 50+ 个用例，含：
 
 - 手算小例、确定性随机多组规模（1×1 到 256×256）；
 - **全负**（负×负、负×正）、**全零/零散点**、**长尾零**（256 长但尾部
@@ -98,6 +146,11 @@ result.transform_length     # 补零后的 NTT 长度（2 的幂）
 - 接口上限 256 项 × ±10^6 对拍朴素参考；
 - `bool` / `NaN` / `Infinity` / 有限 `float` / 字符串 / `None` 拒绝；
   超长、空、超系数界拒绝；错误信息可定位；输入不被修改。
+- 多点求值：手算小例、零多项式、单点、点 0、次数高于点数、三素数随机
+  对拍**独立 Horner 逐点参考**、128 点上限、乘法次数确定性；
+- 插值：手算小例、单点、点 0、三素数随机对拍**独立 Vandermonde 高斯消元
+  参考**（`tests/reference.py`，不导入被测核心）、系数规范到 [0, p-1]、
+  重复点（含模 p 意义重复）拒绝、点数/值数不等拒绝、往返求值仅作补充。
 
 ## 误差口径
 
@@ -109,6 +162,8 @@ result.transform_length     # 补零后的 NTT 长度（2 的幂）
 
 - 只实现本题契约的数学子集：三个固定素数、长度 ≤ 256、系数绝对值 ≤ 10^6；
   不宣称通用 NTT/CRT 行业标准兼容，不支持任意模数或任意原根配置。
+- 多点求值 / 插值进一步限于点数 ≤ 128、次数 ≤ 128，且只在三个固定 NTT
+  素数上工作；不提供任意素域或更大规模。
 - 纯 Python 实现，追求正确与可证性，而非 SIMD/原生级吞吐；接口规模下
   256×256 双模卷积为毫秒量级。
 - 不提供网站、CLI 产品、报表等；终端命令仅用于跑测试与演示。
